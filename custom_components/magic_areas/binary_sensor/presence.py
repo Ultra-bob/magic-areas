@@ -78,8 +78,9 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
         self._state: bool = False
 
         self._last_off_time: datetime = datetime.now(UTC) - timedelta(days=2)
-        # Context of the sensor change that started the clear countdown, so the
-        # eventual clear can be attributed to it
+        # Contexts of the presence sensor changes that make the area occupied or
+        # start the clear countdown, so area state changes are attributed to them
+        self._last_on_context: Context | None = None
         self._last_off_context: Context | None = None
         self._clear_timeout_callback: Callable[[], None] | None = None
 
@@ -240,8 +241,14 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
             )
             return None
 
+        # Attribute updates (e.g. a light sensor's reading) aren't a cause
+        old_state = event.data["old_state"]
+        context = (
+            event.context if old_state is None or old_state.state != to_state else None
+        )
+
         self.hass.loop.call_soon_threadsafe(
-            self._update_state, datetime.now(UTC), event.context
+            self._update_state, datetime.now(UTC), context
         )
 
     def _sensor_state_change(self, event: Event[EventStateChangedData]) -> None:
@@ -276,6 +283,9 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
             )
             return
 
+        old_state = event.data["old_state"]
+        is_state_change = old_state is None or old_state.state != to_state
+
         if to_state and to_state not in self._valid_on_states():
             _LOGGER.debug(
                 "Setting last non-normal time %s %s",
@@ -283,15 +293,15 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
                 event.data["new_state"],
             )
             self._last_off_time = datetime.now(UTC)  # Update last_off_time
-            self._last_off_context = event.context
+            if is_state_change:
+                self._last_off_context = event.context
             # Clear the timeout
             self._remove_clear_timeout()
-        else:
+        elif is_state_change:
+            self._last_on_context = event.context
             self._last_off_context = None
 
-        self.hass.loop.call_soon_threadsafe(
-            self._update_state, datetime.now(UTC), event.context
-        )
+        self.hass.loop.call_soon_threadsafe(self._update_state, datetime.now(UTC))
 
     async def _async_update_state(self, timeout: int) -> None:
         await asyncio.sleep(timeout)
@@ -303,20 +313,25 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
     ) -> None:
         """Update the area's state and report changes.
 
-        `context` is the context of the event that triggered this update, if any.
+        `context` is the context of the secondary state change that triggered this
+        update, if any.
         """
 
         states_tuple = self._update_area_states()
         new_states, lost_states = states_tuple
 
+        # Occupancy changes come from presence sensors, whichever event (e.g. a
+        # light sensor update) ran this update. A clear can come long after the
+        # sensor turned off, once the clear timeout runs out.
+        if AreaStates.OCCUPIED in new_states:
+            context = self._last_on_context
+        elif AreaStates.CLEAR in new_states:
+            context = self._last_off_context
+
         if context is None and (new_states or lost_states):
-            if AreaStates.CLEAR in new_states and self._last_off_context:
-                # Clear timeout ran out, attribute it to the sensor that went off
-                context = self._last_off_context
-            else:
-                # Not caused by an event (e.g. a timer), start a new context so
-                # actions taken on this change are traced back to it
-                context = Context()
+            # No known cause (e.g. a timer), start a new context so actions
+            # taken on this change are traced back to it
+            context = Context()
 
         state_changed = any(
             state in new_states for state in (AreaStates.OCCUPIED, AreaStates.CLEAR)

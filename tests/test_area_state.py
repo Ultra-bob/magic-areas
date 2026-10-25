@@ -78,7 +78,14 @@ def mock_config_entry_keep_only_sensor() -> MockConfigEntry:
 def mock_config_entry_clear_timeout() -> MockConfigEntry:
     """Fixture for mock configuration entry."""
     data = get_basic_config_entry_data(DEFAULT_MOCK_AREA)
-    data.update({CONF_CLEAR_TIMEOUT: 1})
+    data.update(
+        {
+            CONF_CLEAR_TIMEOUT: 1,
+            CONF_SECONDARY_STATES: {
+                CONF_DARK_ENTITY: "binary_sensor.area_light_sensor"
+            },
+        }
+    )
     return MockConfigEntry(domain=DOMAIN, data=data)
 
 
@@ -229,6 +236,64 @@ async def test_area_state_change_context(
     # Area clears well after the motion sensor turned off, but is still attributed to it
     freezer.tick(timedelta(minutes=2))
     async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    area_binary_sensor = hass.states.get(area_sensor_entity_id)
+    assert_state(area_binary_sensor, STATE_OFF)
+    assert area_binary_sensor.context.id == motion_sensor.context.id
+
+
+async def test_area_state_context_with_light_sensor(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entities_binary_sensor_motion_one: list[MockBinarySensor],
+    _setup_integration_clear_timeout,
+) -> None:
+    """Test light sensor changes are attributed to it, and only those.
+
+    A light sensor reporting a new value or changing state can be what runs the
+    update that finds the area extended, or the clear timeout ran out.
+    """
+
+    # Driven through the entity, as its polling would undo a direct state change
+    motion_sensor_entity = entities_binary_sensor_motion_one[0]
+    motion_sensor_entity_id = motion_sensor_entity.entity_id
+    light_sensor_entity_id = "binary_sensor.area_light_sensor"
+    area_sensor_entity_id = (
+        f"{BINARY_SENSOR_DOMAIN}.magic_areas_presence_tracking_kitchen_area_state"
+    )
+
+    # Area turns dark because of the light sensor
+    hass.states.async_set(light_sensor_entity_id, STATE_OFF, {"illuminance": 40})
+    await hass.async_block_till_done()
+
+    area_binary_sensor = hass.states.get(area_sensor_entity_id)
+    light_sensor = hass.states.get(light_sensor_entity_id)
+    assert_in_attribute(area_binary_sensor, ATTR_STATES, AreaStates.DARK)
+    assert area_binary_sensor.context.id == light_sensor.context.id
+
+    # Area is occupied long enough to be extended, found by a light sensor reading
+    motion_sensor_entity.turn_on()
+    await hass.async_block_till_done()
+
+    freezer.tick(timedelta(minutes=6))
+    hass.states.async_set(light_sensor_entity_id, STATE_OFF, {"illuminance": 42})
+    await hass.async_block_till_done()
+
+    area_binary_sensor = hass.states.get(area_sensor_entity_id)
+    light_sensor = hass.states.get(light_sensor_entity_id)
+    assert_in_attribute(area_binary_sensor, ATTR_STATES, AreaStates.EXTENDED)
+    assert area_binary_sensor.context.id != light_sensor.context.id
+
+    # Clear timeout runs out, light is detected before the clear timer fires
+    motion_sensor_entity.turn_off()
+    await hass.async_block_till_done()
+
+    motion_sensor = hass.states.get(motion_sensor_entity_id)
+    assert_state(hass.states.get(area_sensor_entity_id), STATE_ON)
+
+    freezer.tick(timedelta(minutes=11))
+    hass.states.async_set(light_sensor_entity_id, STATE_ON, {"illuminance": 300})
     await hass.async_block_till_done()
 
     area_binary_sensor = hass.states.get(area_sensor_entity_id)
