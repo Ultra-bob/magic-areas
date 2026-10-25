@@ -8,6 +8,7 @@ from homeassistant.components.climate.const import (
     SERVICE_SET_PRESET_MODE,
 )
 from homeassistant.const import ATTR_ENTITY_ID, EntityCategory
+from homeassistant.core import Context
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from custom_components.magic_areas.base.magic import MagicArea
@@ -87,7 +88,7 @@ class ClimateControlSwitch(SwitchBase):
             )
         )
 
-    async def area_state_changed(self, area_id, states_tuple):
+    async def area_state_changed(self, area_id, states_tuple, context=None):
         """Handle area state change event."""
 
         if not self.is_on:
@@ -112,15 +113,15 @@ class ClimateControlSwitch(SwitchBase):
         # Handle area clear because the other states doesn't matter
         if self.area.has_state(AreaStates.CLEAR):
             if self.preset_map[AreaStates.CLEAR]:
-                await self.apply_preset(AreaStates.CLEAR)
+                await self.apply_preset(AreaStates.CLEAR, context)
             return
 
         # Handle each state top priority to last, returning early
         for p_state in priority_states:
             if self.area.has_state(p_state) and self.preset_map[p_state]:
-                return await self.apply_preset(p_state)
+                return await self.apply_preset(p_state, context)
 
-    async def apply_preset(self, state_name: str):
+    async def apply_preset(self, state_name: str, context: Context | None = None):
         """Set climate entity to given preset."""
 
         selected_preset: str = self.preset_map[state_name]
@@ -133,6 +134,7 @@ class ClimateControlSwitch(SwitchBase):
                     ATTR_ENTITY_ID: self.climate_entity_id,
                     ATTR_PRESET_MODE: selected_preset,
                 },
+                context=context,
             )
         # pylint: disable-next=broad-exception-caught
         except Exception as e:

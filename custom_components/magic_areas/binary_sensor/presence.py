@@ -13,8 +13,11 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.components.sun.const import STATE_ABOVE_HORIZON
 from homeassistant.const import STATE_ON
-from homeassistant.core import Event, EventStateChangedData, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
+from homeassistant.core import Context, Event, EventStateChangedData, callback
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -75,6 +78,9 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
         self._state: bool = False
 
         self._last_off_time: datetime = datetime.now(UTC) - timedelta(days=2)
+        # Context of the sensor change that started the clear countdown, so the
+        # eventual clear can be attributed to it
+        self._last_off_context: Context | None = None
         self._clear_timeout_callback: Callable[[], None] | None = None
 
         self._sensors: list[str] = []
@@ -234,7 +240,9 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
             )
             return None
 
-        self.hass.loop.call_soon_threadsafe(self._update_state, datetime.now(UTC))
+        self.hass.loop.call_soon_threadsafe(
+            self._update_state, datetime.now(UTC), event.context
+        )
 
     def _sensor_state_change(self, event: Event[EventStateChangedData]) -> None:
         """Actions when the sensor state has changed."""
@@ -275,21 +283,40 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
                 event.data["new_state"],
             )
             self._last_off_time = datetime.now(UTC)  # Update last_off_time
+            self._last_off_context = event.context
             # Clear the timeout
             self._remove_clear_timeout()
+        else:
+            self._last_off_context = None
 
-        self.hass.loop.call_soon_threadsafe(self._update_state, datetime.now(UTC))
+        self.hass.loop.call_soon_threadsafe(
+            self._update_state, datetime.now(UTC), event.context
+        )
 
     async def _async_update_state(self, timeout: int) -> None:
         await asyncio.sleep(timeout)
         self._update_state()
 
     @callback
-    def _update_state(self, extra: datetime | None = None) -> None:
-        """Update the area's state and report changes."""
+    def _update_state(
+        self, extra: datetime | None = None, context: Context | None = None
+    ) -> None:
+        """Update the area's state and report changes.
+
+        `context` is the context of the event that triggered this update, if any.
+        """
 
         states_tuple = self._update_area_states()
         new_states, lost_states = states_tuple
+
+        if context is None and (new_states or lost_states):
+            if AreaStates.CLEAR in new_states and self._last_off_context:
+                # Clear timeout ran out, attribute it to the sensor that went off
+                context = self._last_off_context
+            else:
+                # Not caused by an event (e.g. a timer), start a new context so
+                # actions taken on this change are traced back to it
+                context = Context()
 
         state_changed = any(
             state in new_states for state in (AreaStates.OCCUPIED, AreaStates.CLEAR)
@@ -306,12 +333,14 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
             # Consider all secondary states new
             states_tuple = (self.area.states.copy(), [])
 
-        self._report_state_change(states_tuple)
+        self._report_state_change(states_tuple, context)
 
         # Safety check: ensure stuck states get cleared
         self._validate_state_consistency()
 
-    def _report_state_change(self, states_tuple=([], [])):
+    def _report_state_change(
+        self, states_tuple=([], []), context: Context | None = None
+    ) -> None:
         """Fire an event reporting area state change."""
         new_states, lost_states = states_tuple
         _LOGGER.debug(
@@ -320,8 +349,12 @@ class AreaStateTrackerEntity(BinaryMagicEntity):
             str(new_states),
             str(lost_states),
         )
-        dispatcher_send(
-            self.hass, MagicAreasEvents.AREA_STATE_CHANGED, self.area.id, states_tuple
+        async_dispatcher_send(
+            self.hass,
+            MagicAreasEvents.AREA_STATE_CHANGED,
+            self.area.id,
+            states_tuple,
+            context,
         )
 
     # Area state calculations
@@ -692,8 +725,12 @@ class AreaStateBinarySensor(AreaStateTrackerEntity, BinarySensorEntity):
         )
 
     # Area change handlers
+    @callback
     def _area_state_changed(
-        self, area_id: str, states_tuple: tuple[list[str], list[str]]
+        self,
+        area_id: str,
+        states_tuple: tuple[list[str], list[str]],
+        context: Context | None = None,
     ) -> None:
         """Handle area state change event."""
 
@@ -715,7 +752,10 @@ class AreaStateBinarySensor(AreaStateTrackerEntity, BinarySensorEntity):
 
         self._attr_is_on = self.area.is_occupied()
         self._attr_extra_state_attributes.update(self.get_metadata())
-        self.schedule_update_ha_state()
+        # Attribute the state change to whatever caused it (e.g. a motion sensor)
+        if context:
+            self.async_set_context(context)
+        self.async_write_ha_state()
 
 
 class MetaAreaStateBinarySensor(AreaStateBinarySensor):

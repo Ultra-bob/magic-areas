@@ -35,6 +35,7 @@ from tests.const import DEFAULT_MOCK_AREA
 from tests.helpers import (
     assert_attribute,
     assert_state,
+    async_block_till_done_and_timers,
     get_basic_config_entry_data,
     init_integration,
     setup_mock_entities,
@@ -204,7 +205,7 @@ async def test_climate_control_logic(
 
     # Area clear, preset should be PRESET_AWAY
     hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     motion_sensor_state = hass.states.get(motion_sensor_entity_id)
     assert_state(motion_sensor_state, STATE_OFF)

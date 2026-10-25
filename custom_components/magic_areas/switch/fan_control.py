@@ -11,7 +11,7 @@ from homeassistant.const import (
     STATE_ON,
     EntityCategory,
 )
-from homeassistant.core import Event, EventStateChangedData
+from homeassistant.core import Context, Event, EventStateChangedData
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -83,9 +83,9 @@ class FanControlSwitch(SwitchBase):
     ) -> None:
         """Call update state from track state change event."""
 
-        await self.run_logic(self.area.states)
+        await self.run_logic(self.area.states, event.context)
 
-    async def area_state_changed(self, area_id, states_tuple):
+    async def area_state_changed(self, area_id, states_tuple, context=None):
         """Handle area state change event."""
 
         if area_id != self.area.id:
@@ -99,9 +99,11 @@ class FanControlSwitch(SwitchBase):
 
         # pylint: disable-next=unused-variable
         new_states, lost_states = states_tuple
-        await self.run_logic(states=new_states)
+        await self.run_logic(states=new_states, context=context)
 
-    async def run_logic(self, states: list[str]) -> None:
+    async def run_logic(
+        self, states: list[str], context: Context | None = None
+    ) -> None:
         """Run fan control logic."""
 
         if not self.is_on:
@@ -115,7 +117,10 @@ class FanControlSwitch(SwitchBase):
         if AreaStates.CLEAR in states:
             _LOGGER.debug("%s: Area clear, turning off fans", self.name)
             await self.hass.services.async_call(
-                FAN_DOMAIN, SERVICE_TURN_OFF, {ATTR_ENTITY_ID: fan_group_entity_id}
+                FAN_DOMAIN,
+                SERVICE_TURN_OFF,
+                {ATTR_ENTITY_ID: fan_group_entity_id},
+                context=context,
             )
             return
 
@@ -140,14 +145,20 @@ class FanControlSwitch(SwitchBase):
         if self.is_setpoint_reached():
             _LOGGER.debug("%s: Setpoint reached, turning on fans", self.name)
             await self.hass.services.async_call(
-                FAN_DOMAIN, SERVICE_TURN_ON, {ATTR_ENTITY_ID: fan_group_entity_id}
+                FAN_DOMAIN,
+                SERVICE_TURN_ON,
+                {ATTR_ENTITY_ID: fan_group_entity_id},
+                context=context,
             )
         else:
             fan_group_state = self.hass.states.get(fan_group_entity_id)
             if fan_group_state and fan_group_state.state == STATE_ON:
                 _LOGGER.debug("%s: Setpoint not reached, turning off fans", self.name)
                 await self.hass.services.async_call(
-                    FAN_DOMAIN, SERVICE_TURN_OFF, {ATTR_ENTITY_ID: fan_group_entity_id}
+                    FAN_DOMAIN,
+                    SERVICE_TURN_OFF,
+                    {ATTR_ENTITY_ID: fan_group_entity_id},
+                    context=context,
                 )
         return
 

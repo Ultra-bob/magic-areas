@@ -39,6 +39,7 @@ from tests.const import DEFAULT_MOCK_AREA
 from tests.helpers import (
     assert_in_attribute,
     assert_state,
+    async_block_till_done_and_timers,
     get_basic_config_entry_data,
     init_integration,
     setup_mock_entities,
@@ -238,7 +239,7 @@ async def test_fan_group_logic(
 
     # > Reset
     hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     area_sensor_state = hass.states.get(area_sensor_entity_id)
     assert_state(area_sensor_state, STATE_OFF)
@@ -272,7 +273,7 @@ async def test_fan_group_logic(
 
     # > Reset
     hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     area_sensor_state = hass.states.get(area_sensor_entity_id)
     assert_state(area_sensor_state, STATE_OFF)
@@ -304,7 +305,7 @@ async def test_fan_group_logic(
 
     # > Reset
     hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     area_sensor_state = hass.states.get(area_sensor_entity_id)
     assert_state(area_sensor_state, STATE_OFF)

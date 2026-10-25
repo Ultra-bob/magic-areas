@@ -1,11 +1,16 @@
 """Test for area changes and how the system handles it."""
 
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 import logging
 from typing import Any
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from homeassistant.components.binary_sensor import (
     DOMAIN as BINARY_SENSOR_DOMAIN,
@@ -18,6 +23,7 @@ from custom_components.magic_areas.const import (
     ATTR_PRESENCE_SENSORS,
     ATTR_STATES,
     CONF_ACCENT_ENTITY,
+    CONF_CLEAR_TIMEOUT,
     CONF_DARK_ENTITY,
     CONF_KEEP_ONLY_ENTITIES,
     CONF_SECONDARY_STATES,
@@ -30,6 +36,7 @@ from tests.const import DEFAULT_MOCK_AREA
 from tests.helpers import (
     assert_in_attribute,
     assert_state,
+    async_block_till_done_and_timers,
     get_basic_config_entry_data,
     init_integration,
     setup_mock_entities,
@@ -67,6 +74,14 @@ def mock_config_entry_keep_only_sensor() -> MockConfigEntry:
     return MockConfigEntry(domain=DOMAIN, data=data)
 
 
+@pytest.fixture(name="clear_timeout_config_entry")
+def mock_config_entry_clear_timeout() -> MockConfigEntry:
+    """Fixture for mock configuration entry."""
+    data = get_basic_config_entry_data(DEFAULT_MOCK_AREA)
+    data.update({CONF_CLEAR_TIMEOUT: 1})
+    return MockConfigEntry(domain=DOMAIN, data=data)
+
+
 @pytest.fixture(name="_setup_integration_secondary_states")
 async def setup_integration_secondary_states(
     hass: HomeAssistant,
@@ -77,6 +92,18 @@ async def setup_integration_secondary_states(
     await init_integration(hass, [secondary_states_config_entry])
     yield
     await shutdown_integration(hass, [secondary_states_config_entry])
+
+
+@pytest.fixture(name="_setup_integration_clear_timeout")
+async def setup_integration_clear_timeout(
+    hass: HomeAssistant,
+    clear_timeout_config_entry: MockConfigEntry,
+) -> AsyncGenerator[Any]:
+    """Set up integration with a clear timeout."""
+
+    await init_integration(hass, [clear_timeout_config_entry])
+    yield
+    await shutdown_integration(hass, [clear_timeout_config_entry])
 
 
 @pytest.fixture(name="_setup_integration_keep_only_sensor")
@@ -156,7 +183,7 @@ async def test_area_primary_state_change(
 
     # Turn off motion sensor
     hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     # @FIXME figure out why this is blocking instead of doing the VirtualClock trick
     # await asyncio.sleep(60)
@@ -168,6 +195,45 @@ async def test_area_primary_state_change(
     assert_state(motion_sensor, STATE_OFF)
     assert_state(area_binary_sensor, STATE_OFF)
     assert_in_attribute(area_binary_sensor, ATTR_STATES, AreaStates.CLEAR)
+
+
+async def test_area_state_change_context(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entities_binary_sensor_motion_one: list[MockBinarySensor],
+    _setup_integration_clear_timeout,
+) -> None:
+    """Test area state changes are attributed to the sensor that caused them."""
+
+    motion_sensor_entity_id = entities_binary_sensor_motion_one[0].entity_id
+    area_sensor_entity_id = (
+        f"{BINARY_SENSOR_DOMAIN}.magic_areas_presence_tracking_kitchen_area_state"
+    )
+
+    # Turn on motion sensor
+    hass.states.async_set(motion_sensor_entity_id, STATE_ON)
+    await hass.async_block_till_done()
+
+    area_binary_sensor = hass.states.get(area_sensor_entity_id)
+    motion_sensor = hass.states.get(motion_sensor_entity_id)
+    assert_state(area_binary_sensor, STATE_ON)
+    assert area_binary_sensor.context.id == motion_sensor.context.id
+
+    # Turn off motion sensor, area stays occupied until the clear timeout
+    hass.states.async_set(motion_sensor_entity_id, STATE_OFF)
+    await hass.async_block_till_done()
+
+    motion_sensor = hass.states.get(motion_sensor_entity_id)
+    assert_state(hass.states.get(area_sensor_entity_id), STATE_ON)
+
+    # Area clears well after the motion sensor turned off, but is still attributed to it
+    freezer.tick(timedelta(minutes=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    area_binary_sensor = hass.states.get(area_sensor_entity_id)
+    assert_state(area_binary_sensor, STATE_OFF)
+    assert area_binary_sensor.context.id == motion_sensor.context.id
 
 
 async def test_area_secondary_state_change(
@@ -300,7 +366,7 @@ async def test_keep_only_sensors(
 
     # Turn off flappy sensor
     hass.states.async_set(flappy_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     # Update states, ensure area clears
     area_binary_sensor = hass.states.get(area_sensor_entity_id)

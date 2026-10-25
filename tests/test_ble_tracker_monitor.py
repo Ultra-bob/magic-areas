@@ -24,6 +24,7 @@ from tests.const import DEFAULT_MOCK_AREA
 from tests.helpers import (
     assert_in_attribute,
     assert_state,
+    async_block_till_done_and_timers,
     get_basic_config_entry_data,
     init_integration,
     setup_mock_entities,
@@ -131,7 +132,7 @@ async def test_ble_tracker_presence_sensor(
 
     # Set BLE sensor to something else
     hass.states.async_set(ble_sensor_entity_id, STATE_UNKNOWN)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     ble_sensor_state = hass.states.get(ble_sensor_entity_id)
     assert_state(ble_sensor_state, STATE_UNKNOWN)

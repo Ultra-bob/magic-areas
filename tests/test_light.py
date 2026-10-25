@@ -11,7 +11,14 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
 from homeassistant.components.switch.const import DOMAIN as SWITCH_DOMAIN
-from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_ON, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import DATA_DISPATCHER
 
@@ -31,6 +38,7 @@ from tests.const import DEFAULT_MOCK_AREA
 from tests.helpers import (
     assert_in_attribute,
     assert_state,
+    async_block_till_done_and_timers,
     get_basic_config_entry_data,
     init_integration,
     setup_mock_entities,
@@ -167,7 +175,7 @@ async def test_light_group_basic(
 
     # Turn motion sensor off
     hass.states.async_set(mock_motion_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     # Test area state is STATE_OFF
     area_state = hass.states.get(area_sensor_entity_id)
@@ -176,6 +184,56 @@ async def test_light_group_basic(
     # Check light group is off
     light_group_state = hass.states.get(light_group_entity_id)
     assert_state(light_group_state, STATE_OFF)
+
+
+async def test_light_group_context(
+    hass: HomeAssistant,
+    entities_light_one: list[MockLight],
+    entities_binary_sensor_motion_one: list[MockBinarySensor],
+    _setup_integration_light_groups,
+) -> None:
+    """Test light group changes are attributed to what caused them."""
+
+    mock_light_entity_id = entities_light_one[0].entity_id
+    mock_motion_sensor_entity_id = entities_binary_sensor_motion_one[0].entity_id
+    light_group_entity_id = (
+        f"{LIGHT_DOMAIN}.magic_areas_light_groups_{DEFAULT_MOCK_AREA}_overhead_lights"
+    )
+    light_control_entity_id = (
+        f"{SWITCH_DOMAIN}.magic_areas_light_groups_{DEFAULT_MOCK_AREA}_light_control"
+    )
+
+    # Turn on light control
+    await hass.services.async_call(
+        SWITCH_DOMAIN, SERVICE_TURN_ON, {ATTR_ENTITY_ID: light_control_entity_id}
+    )
+    await hass.async_block_till_done()
+
+    # Turn motion sensor on, coming back from unavailable so the cause
+    # isn't an on/off transition
+    hass.states.async_set(mock_motion_sensor_entity_id, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    hass.states.async_set(mock_motion_sensor_entity_id, STATE_ON)
+    await hass.async_block_till_done()
+
+    # Light group and its lights were turned on because of the motion sensor
+    motion_sensor_state = hass.states.get(mock_motion_sensor_entity_id)
+    light_group_state = hass.states.get(light_group_entity_id)
+    assert_state(light_group_state, STATE_ON)
+    assert light_group_state.context.id == motion_sensor_state.context.id
+    mock_light_state = hass.states.get(mock_light_entity_id)
+    assert mock_light_state.context.id == motion_sensor_state.context.id
+    assert light_group_state.attributes["controlling"] is True
+
+    # Turning the light off by hand still releases control
+    await hass.services.async_call(
+        LIGHT_DOMAIN, SERVICE_TURN_OFF, {ATTR_ENTITY_ID: mock_light_entity_id}
+    )
+    await hass.async_block_till_done()
+
+    light_group_state = hass.states.get(light_group_entity_id)
+    assert_state(light_group_state, STATE_OFF)
+    assert light_group_state.attributes["controlling"] is False
 
 
 async def test_light_group_releases_listeners_on_reload(

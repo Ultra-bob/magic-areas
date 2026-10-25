@@ -9,7 +9,10 @@ from homeassistant.core import HomeAssistant
 from custom_components.magic_areas.const import AreaStates
 
 from tests.const import MockAreaIds
-from tests.helpers import assert_state
+from tests.helpers import (
+    assert_state,
+    async_block_till_done_and_timers,
+)
 from tests.mocks import MockBinarySensor
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +86,7 @@ async def test_meta_area_primary_state_change(
     assert_state(global_area_sensor_state, STATE_ON)
 
     hass.states.async_set(kitchen_motion_sensor_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     kitchen_motion_sensor_state = hass.states.get(kitchen_motion_sensor_id)
     assert_state(kitchen_motion_sensor_state, STATE_OFF)
@@ -123,7 +126,7 @@ async def test_meta_area_primary_state_change(
     assert_state(global_area_sensor_state, STATE_ON)
 
     hass.states.async_set(backyard_motion_sensor_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     backyard_motion_sensor_state = hass.states.get(kitchen_motion_sensor_id)
     assert_state(backyard_motion_sensor_state, STATE_OFF)
@@ -151,7 +154,7 @@ async def test_meta_area_primary_state_change(
     assert_state(ground_level_area_sensor_state, STATE_ON)
 
     hass.states.async_set(backyard_motion_sensor_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     ground_level_area_sensor_state = hass.states.get(ground_level_area_sensor_entity_id)
     assert_state(ground_level_area_sensor_state, STATE_OFF)
@@ -166,7 +169,7 @@ async def test_meta_area_primary_state_change(
     assert_state(first_floor_area_sensor_state, STATE_ON)
 
     hass.states.async_set(kitchen_motion_sensor_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     first_floor_area_sensor_state = hass.states.get(first_floor_area_sensor_entity_id)
     assert_state(first_floor_area_sensor_state, STATE_OFF)
@@ -181,7 +184,7 @@ async def test_meta_area_primary_state_change(
     assert_state(second_floor_area_sensor_state, STATE_ON)
 
     hass.states.async_set(master_bedroom_area_sensor_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
+    await async_block_till_done_and_timers(hass)
 
     second_floor_area_sensor_state = hass.states.get(second_floor_area_sensor_entity_id)
     assert_state(second_floor_area_sensor_state, STATE_OFF)

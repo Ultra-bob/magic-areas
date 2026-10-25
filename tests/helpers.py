@@ -8,7 +8,10 @@ import pathlib
 from typing import Any, NoReturn
 from unittest.mock import Mock, patch
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 import voluptuous as vol
 
 from homeassistant import loader
@@ -244,6 +247,19 @@ async def shutdown_integration(
     for config_entry in config_entries:
         assert config_entry.state is ConfigEntryState.NOT_LOADED
     _LOGGER.info("Integration unloaded.")
+
+
+async def async_block_till_done_and_timers(hass: HomeAssistant) -> None:
+    """Block till done, also running timers that are already due.
+
+    `async_block_till_done` doesn't wait on timers, so a clear scheduled with
+    `async_call_later` (e.g. a clear timeout of 0) may not have happened yet.
+    Runs a few rounds, as an area clearing can start its meta-areas' clear timers.
+    """
+    await hass.async_block_till_done()
+    for _ in range(3):
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
 
 
 async def setup_mock_entities(

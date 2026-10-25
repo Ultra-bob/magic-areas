@@ -193,5 +193,5 @@ class AreaAwareMediaPlayer(MagicEntity, MediaPlayerEntity):
             data.update(kwargs)
 
         await self.hass.services.async_call(
-            MEDIA_PLAYER_DOMAIN, SERVICE_PLAY_MEDIA, data
+            MEDIA_PLAYER_DOMAIN, SERVICE_PLAY_MEDIA, data, context=self._context
         )

@@ -12,6 +12,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
 )
+from homeassistant.core import Context
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -192,6 +193,8 @@ class AreaLightGroup(MagicLightGroup):
 
         self.controlling = True
         self.controlled = False
+        # Context of our last service call, to recognize the resulting state change
+        self._control_context: Context | None = None
 
         self._icon = LIGHT_GROUP_DEFAULT_ICON
 
@@ -270,7 +273,7 @@ class AreaLightGroup(MagicLightGroup):
 
     # State Change Handling
 
-    def area_state_changed(self, area_id, states_tuple):
+    def area_state_changed(self, area_id, states_tuple, context=None):
         """Handle area state change event."""
         if area_id != self.area.id:
             self.logger.debug(
@@ -294,12 +297,12 @@ class AreaLightGroup(MagicLightGroup):
 
         # Handle all lights group
         if self.category == LightGroupCategory.ALL:
-            return self.state_change_primary(states_tuple)
+            return self.state_change_primary(states_tuple, context)
 
         # Handle light category
-        return self.state_change_secondary(states_tuple)
+        return self.state_change_secondary(states_tuple, context)
 
-    def state_change_primary(self, states_tuple):
+    def state_change_primary(self, states_tuple, context=None):
         """Handle primary state change."""
         # pylint: disable-next=unused-variable
         new_states, lost_states = states_tuple
@@ -308,11 +311,11 @@ class AreaLightGroup(MagicLightGroup):
         if AreaStates.CLEAR in new_states:
             self.logger.debug("%s: Area is clear, should turn off lights!", self.name)
             self.reset_control()
-            return self._turn_off()
+            return self._turn_off(context)
 
         return False
 
-    def state_change_secondary(self, states_tuple):
+    def state_change_secondary(self, states_tuple, context=None):
         """Handle secondary state change."""
         new_states, lost_states = states_tuple
 
@@ -330,7 +333,7 @@ class AreaLightGroup(MagicLightGroup):
                 and AreaStates.OCCUPIED not in new_states
             ):
                 self.controlled = True
-                self._turn_off()
+                self._turn_off(context)
             return False
 
         # Only react to actual secondary state changes
@@ -408,7 +411,7 @@ class AreaLightGroup(MagicLightGroup):
                 str(valid_states),
             )
             self.controlled = True
-            return self._turn_on()
+            return self._turn_on(context)
 
         # Only turn lights off if not going into dark state
         if AreaStates.DARK in new_states:
@@ -425,7 +428,7 @@ class AreaLightGroup(MagicLightGroup):
         ]
         if out_of_priority_states:
             self.controlled = True
-            return self._turn_off()
+            return self._turn_off(context)
 
         # Do not turn off if no new PRIORITY_STATES
         new_priority_states = [
@@ -436,7 +439,7 @@ class AreaLightGroup(MagicLightGroup):
             return False
 
         self.controlled = True
-        return self._turn_off()
+        return self._turn_off(context)
 
     def relevant_states(self):
         """Return relevant states and remove irrelevant ones (opinionated)."""
@@ -452,7 +455,7 @@ class AreaLightGroup(MagicLightGroup):
 
     # Light Handling
 
-    def _turn_on(self):
+    def _turn_on(self, context: Context | None = None):
         """Turn on light if it's not already on and if we're controlling it."""
         if not self.controlling:
             return False
@@ -462,12 +465,11 @@ class AreaLightGroup(MagicLightGroup):
 
         self.controlled = True
 
-        service_data = {ATTR_ENTITY_ID: self.entity_id}
-        self.hass.services.call(LIGHT_DOMAIN, SERVICE_TURN_ON, service_data)
+        self._call_light_service(SERVICE_TURN_ON, context)
 
         return True
 
-    def _turn_off(self):
+    def _turn_off(self, context: Context | None = None):
         """Turn off light if it's not already off and we're controlling it."""
         if not self.controlling:
             return False
@@ -475,10 +477,17 @@ class AreaLightGroup(MagicLightGroup):
         if not self.is_on:
             return False
 
-        service_data = {ATTR_ENTITY_ID: self.entity_id}
-        self.hass.services.call(LIGHT_DOMAIN, SERVICE_TURN_OFF, service_data)
+        self._call_light_service(SERVICE_TURN_OFF, context)
 
         return True
+
+    def _call_light_service(self, service: str, context: Context | None) -> None:
+        """Call a light service on this group under the context of what caused it."""
+        self._control_context = context or Context()
+        service_data = {ATTR_ENTITY_ID: self.entity_id}
+        self.hass.services.call(
+            LIGHT_DOMAIN, service, service_data, context=self._control_context
+        )
 
     # Control Release
 
@@ -549,8 +558,12 @@ class AreaLightGroup(MagicLightGroup):
             if self.category == LightGroupCategory.ALL:
                 self.handle_group_state_change_primary()
             else:
-                # Ignore certain events
-                if origin_event.event_type == "state_changed":
+                # Ignore certain events. Changes we caused share the context of
+                # whatever triggered them (e.g. a motion sensor), so don't filter those.
+                if (
+                    origin_event.event_type == "state_changed"
+                    and event.context != self._control_context
+                ):
                     # Skip non ON/OFF state changes
                     if (
                         "old_state" not in origin_event.data

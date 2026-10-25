@@ -42,7 +42,7 @@ class MediaPlayerControlSwitch(SwitchBase):
             )
         )
 
-    async def area_state_changed(self, area_id, states_tuple):
+    async def area_state_changed(self, area_id, states_tuple, context=None):
         """Handle area state change event."""
 
         if not self.is_on:
@@ -67,5 +67,6 @@ class MediaPlayerControlSwitch(SwitchBase):
                 MEDIA_PLAYER_DOMAIN,
                 SERVICE_TURN_OFF,
                 {ATTR_ENTITY_ID: self.media_player_group_id},
+                context=context,
             )
             return
